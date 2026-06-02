@@ -1,0 +1,57 @@
+import json
+from collections import Counter
+from itertools import combinations
+import pandas as pd
+
+movies_df = pd.read_csv("tmdb_5000_movies.csv")
+credits_df = pd.read_csv("tmdb_5000_credits.csv")
+
+movies_subset = movies_df[["id", "popularity"]].rename(columns={"id": "movie_id"})
+raw_data = pd.merge(credits_df[["movie_id", "cast"]], movies_subset, on="movie_id")
+
+
+# top 800 most popular movies
+raw_data = raw_data.sort_values(by="popularity", ascending=False).head(800)
+
+edge_counts = Counter()
+seen_actors = set()
+
+for index, row in raw_data.iterrows():
+    try:
+        cast_array = json.loads(row["cast"])
+    except Exception:
+        cast_array = []
+
+
+    #top 5 billed actors per movie.
+    top_actors = [actor["name"] for actor in cast_array[:5]]
+
+    for actor in top_actors:
+        seen_actors.add(actor)
+    pairs = list(combinations(sorted(top_actors), 2))
+
+    for p in pairs:
+        edge_counts[p] += 1
+
+nodes_list = []
+for actor in seen_actors:
+    actor_id = f"actor_{actor.replace(' ', '_')}"
+    nodes_list.append({"Id": actor_id, "Label": actor})
+
+edges_list = []
+for (actor_a, actor_b), weight in edge_counts.items():
+    id_a = f"actor_{actor_a.replace(' ', '_')}"
+    id_b = f"actor_{actor_b.replace(' ', '_')}"
+    edges_list.append(
+        {"Source": id_a, "Target": id_b, "Weight": weight, "Type": "Undirected"}
+    )
+
+gephi_nodes = pd.DataFrame(nodes_list)
+gephi_edges = pd.DataFrame(edges_list)
+
+gephi_nodes.to_csv("actor_network_nodes.csv", index=False)
+gephi_edges.to_csv("actor_network_edges.csv", index=False)
+
+print("Data processing complete!")
+print(f"Generated {len(gephi_nodes)} actor nodes.")
+print(f"Generated {len(gephi_edges)} co-stardom connection lines.")
