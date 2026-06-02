@@ -23,8 +23,8 @@ for index, row in raw_data.iterrows():
         cast_array = []
 
 
-    #top 5 billed actors per movie.
-    top_actors = [actor["name"] for actor in cast_array[:5]]
+    #top 10 billed actors per movie.
+    top_actors = [actor["name"] for actor in cast_array[:10]]
 
     for actor in top_actors:
         seen_actors.add(actor)
