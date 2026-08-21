@@ -1,57 +1,175 @@
-import json
-from collections import Counter
-from itertools import combinations
+"""
+KOMPLETTES SKRIPT: von der gefilterten Filmliste bis zu fertigen
+Gephi-Dateien (Knoten + Kanten) inklusive Filminfos pro Schauspieler.
+
+INPUT:  movies_2000_2020_us_uk.csv (Filme, Jahr 2000-2020, USA/UK)
+
+OUTPUT (alles im Ordner "output"):
+  movies.csv       -> ein Film pro Zeile (Filmattribute, ohne Cast-Textblob)
+  movie_cast.csv   -> Long-Format: movie_id, actor_id, actor_name
+  actors.csv       -> eindeutige Schauspielerliste mit ID
+  gephi_nodes.csv  -> Id, Label, movie_count, avg_vote_average,
+                       years_active, top_genres, movie_list
+  gephi_edges.csv  -> Source, Target, Type, Weight (= Anzahl gemeinsamer Filme)
+
+Einstellungen (unten anpassbar):
+  MAX_CAST_PER_MOVIE   -> Hauptcast pro Film begrenzen (Kombinationsexplosion vermeiden)
+  MIN_MOVIES_PER_ACTOR -> Schauspieler mit weniger Filmen werden entfernt
+  MIN_WEIGHT           -> nur Kanten mit mind. so vielen gemeinsamen Filmen behalten
+"""
+
+import os
 import pandas as pd
+from itertools import combinations
+from collections import Counter
 
-movies_df = pd.read_csv("tmdb_5000_movies.csv")
-credits_df = pd.read_csv("tmdb_5000_credits.csv")
+# ===========================================================
+# EINSTELLUNGEN – hier anpassen
+# ===========================================================
+SCRIPT_DIR = os.getcwd()
+INPUT_FILE = os.path.join(SCRIPT_DIR, "movies_2000_2020_us_uk.csv")
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "output")
 
-movies_subset = movies_df[["id", "popularity"]].rename(columns={"id": "movie_id"})
-raw_data = pd.merge(credits_df[["movie_id", "cast"]], movies_subset, on="movie_id")
+MAX_CAST_PER_MOVIE = 10     # Hauptcast pro Film begrenzen; None = kein Limit
+MIN_MOVIES_PER_ACTOR = 10   # Schauspieler mit weniger Filmen werden vorher entfernt
+MIN_WEIGHT = 2              # nur Kanten mit mind. so vielen gemeinsamen Filmen behalten
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ===========================================================
+# SCHRITT 1: Filme laden, Filme & Cast trennen
+# ===========================================================
+print("=" * 60)
+print("SCHRITT 1: Filme & Cast trennen")
+print("=" * 60)
+
+df = pd.read_csv(INPUT_FILE)
+print(f"Eingelesene Filme: {len(df):,}")
+
+df = df.dropna(subset=["cast"]).copy()
+print(f"Filme mit Cast-Angabe: {len(df):,}")
+
+# --- movies.csv: Filmtabelle ohne den Cast-String ---
+movie_cols = [c for c in df.columns if c != "cast"]
+movies = df[movie_cols].rename(columns={"id": "movie_id"})
+movies.to_csv(os.path.join(OUTPUT_DIR, "movies.csv"), index=False)
+print(f"movies.csv geschrieben: {len(movies):,} Filme")
+
+# --- movie_cast.csv: Long-Format (movie_id, actor_name) ---
+cast_long = (
+    df[["id", "cast"]]
+    .rename(columns={"id": "movie_id"})
+    .assign(cast=lambda d: d["cast"].str.split(","))
+    .explode("cast")
+)
+cast_long["actor_name"] = cast_long["cast"].str.strip()
+cast_long = cast_long[cast_long["actor_name"] != ""]
+cast_long = cast_long[["movie_id", "actor_name"]].drop_duplicates()
+print(f"Film-Schauspieler-Paare: {len(cast_long):,}")
+
+# --- actors.csv: eindeutige Schauspielerliste mit ID ---
+unique_actors = sorted(cast_long["actor_name"].unique())
+actors_full = pd.DataFrame({
+    "actor_id": range(1, len(unique_actors) + 1),
+    "actor_name": unique_actors,
+})
+print(f"Eindeutige Schauspieler: {len(actors_full):,}")
+actors_full.to_csv(os.path.join(OUTPUT_DIR, "actors.csv"), index=False)
+
+cast_long = cast_long.merge(actors_full, on="actor_name", how="left")
+cast_long = cast_long[["movie_id", "actor_id", "actor_name"]]
+cast_long.to_csv(os.path.join(OUTPUT_DIR, "movie_cast.csv"), index=False)
+print("movie_cast.csv geschrieben")
+
+# ===========================================================
+# SCHRITT 2: Schauspieler mit zu wenigen Filmen entfernen
+# ===========================================================
+print("\n" + "=" * 60)
+print("SCHRITT 2: Nach Mindest-Filmanzahl filtern")
+print("=" * 60)
+
+movie_counts = cast_long.groupby("actor_id")["movie_id"].nunique()
+keep_actors = set(movie_counts[movie_counts >= MIN_MOVIES_PER_ACTOR].index)
+print(f"Schauspieler mit >= {MIN_MOVIES_PER_ACTOR} Filmen: {len(keep_actors):,} "
+      f"(von {len(movie_counts):,} gesamt)")
+
+cast = cast_long[cast_long["actor_id"].isin(keep_actors)]
+print(f"Verbleibende Film-Schauspieler-Zeilen: {len(cast):,}")
+
+# ===========================================================
+# SCHRITT 3: Kanten (gemeinsame Filme) zählen
+# ===========================================================
+print("\n" + "=" * 60)
+print("SCHRITT 3: Kanten aufbauen")
+print("=" * 60)
+
+edge_counter = Counter()
+grouped = cast.groupby("movie_id")["actor_id"].apply(list)
+print(f"Anzahl Filme (Gruppen): {len(grouped):,}")
+
+for actor_ids in grouped:
+    if MAX_CAST_PER_MOVIE is not None:
+        actor_ids = actor_ids[:MAX_CAST_PER_MOVIE]
+    for a1, a2 in combinations(sorted(actor_ids), 2):
+        edge_counter[(a1, a2)] += 1
+
+print(f"Eindeutige Schauspieler-Paare (vor Weight-Filter): {len(edge_counter):,}")
+
+edges = pd.DataFrame(
+    [(a1, a2, "Undirected", w) for (a1, a2), w in edge_counter.items() if w >= MIN_WEIGHT],
+    columns=["Source", "Target", "Type", "Weight"],
+)
+edges.to_csv(os.path.join(OUTPUT_DIR, "gephi_edges.csv"), index=False)
+print(f"gephi_edges.csv geschrieben: {len(edges):,} Kanten (Weight >= {MIN_WEIGHT})")
+
+# ===========================================================
+# SCHRITT 4: Knoten mit Filminfos anreichern
+# ===========================================================
+print("\n" + "=" * 60)
+print("SCHRITT 4: Knoten mit Filminfos anreichern")
+print("=" * 60)
+
+actors_in_edges = set(edges["Source"]) | set(edges["Target"])
+actors = actors_full[actors_full["actor_id"].isin(actors_in_edges)]
+print(f"Schauspieler mit mind. 1 Kante: {len(actors):,}")
+
+movies_small = movies[["movie_id", "title", "release_date", "vote_average", "genres"]].copy()
+movies_small["year"] = pd.to_datetime(movies_small["release_date"], errors="coerce").dt.year
+
+cast_kept = cast[cast["actor_id"].isin(actors_in_edges)]
+cast_with_movie_info = cast_kept.merge(movies_small, on="movie_id", how="left")
 
 
-# top 800 most popular movies
-raw_data = raw_data.sort_values(by="popularity", ascending=False).head(800)
-
-edge_counts = Counter()
-seen_actors = set()
-
-for index, row in raw_data.iterrows():
-    try:
-        cast_array = json.loads(row["cast"])
-    except Exception:
-        cast_array = []
-
-
-    #top 10 billed actors per movie.
-    top_actors = [actor["name"] for actor in cast_array[:10]]
-
-    for actor in top_actors:
-        seen_actors.add(actor)
-    pairs = list(combinations(sorted(top_actors), 2))
-
-    for p in pairs:
-        edge_counts[p] += 1
-
-nodes_list = []
-for actor in seen_actors:
-    actor_id = f"actor_{actor.replace(' ', '_')}"
-    nodes_list.append({"Id": actor_id, "Label": actor})
-
-edges_list = []
-for (actor_a, actor_b), weight in edge_counts.items():
-    id_a = f"actor_{actor_a.replace(' ', '_')}"
-    id_b = f"actor_{actor_b.replace(' ', '_')}"
-    edges_list.append(
-        {"Source": id_a, "Target": id_b, "Weight": weight, "Type": "Undirected"}
+def build_movie_list(group):
+    g = group.sort_values("year")
+    return "; ".join(
+        f"{row.title} ({int(row.year)})" if pd.notna(row.year) else str(row.title)
+        for row in g.itertuples()
     )
 
-gephi_nodes = pd.DataFrame(nodes_list)
-gephi_edges = pd.DataFrame(edges_list)
 
-gephi_nodes.to_csv("actor_network_nodes.csv", index=False)
-gephi_edges.to_csv("actor_network_edges.csv", index=False)
+agg = cast_with_movie_info.groupby("actor_id").apply(
+    lambda g: pd.Series({
+        "movie_count": g["movie_id"].nunique(),
+        "avg_vote_average": round(g["vote_average"].mean(), 2),
+        "years_active": f"{int(g['year'].min())}-{int(g['year'].max())}" if g["year"].notna().any() else "",
+        "top_genres": ", ".join(
+            pd.Series(
+                [genre.strip() for genres in g["genres"].dropna() for genre in str(genres).split(",")]
+            ).value_counts().head(3).index
+        ),
+        "movie_list": build_movie_list(g),
+    })
+).reset_index()
 
-print("Data processing complete!")
-print(f"Generated {len(gephi_nodes)} actor nodes.")
-print(f"Generated {len(gephi_edges)} co-stardom connection lines.")
+actors = actors.merge(agg, on="actor_id", how="left")
+nodes = actors.rename(columns={"actor_id": "Id", "actor_name": "Label"})
+nodes.to_csv(os.path.join(OUTPUT_DIR, "gephi_nodes.csv"), index=False)
+print(f"gephi_nodes.csv geschrieben: {len(nodes):,} Knoten (mit Filmliste & Attributen)")
+
+print("\n" + "=" * 60)
+print("FERTIG!")
+print("=" * 60)
+print(f"Alle Dateien liegen in: {OUTPUT_DIR}")
+print(" - gephi_nodes.csv  -> in Gephi als Nodes table importieren")
+print(" - gephi_edges.csv  -> in Gephi als Edges table importieren (Type: Undirected)")
