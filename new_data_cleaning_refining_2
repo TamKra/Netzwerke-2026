@@ -1,18 +1,9 @@
 """
-KOMPLETTES SKRIPT: von der gefilterten Filmliste bis zu fertigen
-Gephi-Dateien (Knoten + Kanten) inklusive Filminfos pro Schauspieler.
+Code wurde teils selbst geschrieben, teils mit Claude und Gemini überarbeitet oder ge-troubleshooted und am Ende mit Claude "general überholt" (oder eher in der richtigen Reihenfolge vereint), da über Tage/Wochen hinweg immer wieder 
+was an den Filter-Kriterien abgeändert oder neu erstellt wurde und ich keinen Überblick mehr hatte, wo oder an welche Stelle welches Code-Snippet ins Spiel kommt, 
+da ich nicht immer im selben File daran gearbeitet habe und auch immer wieder andere LLMs konsultiert habe. 
 
-INPUT:  movies_2000_2020_us_uk.csv (Filme, Jahr 2000-2020, USA/UK)
 
-OUTPUT (alles im Ordner "output"):
-  movies.csv       -> ein Film pro Zeile (Filmattribute, ohne Cast-Textblob)
-  movie_cast.csv   -> Long-Format: movie_id, actor_id, actor_name
-  actors.csv       -> eindeutige Schauspielerliste mit ID
-  gephi_nodes.csv  -> Id, Label, movie_count, avg_vote_average,
-                       years_active, top_genres, movie_list
-  gephi_edges.csv  -> Source, Target, Type, Weight (= Anzahl gemeinsamer Filme)
-
-Einstellungen (unten anpassbar):
   MAX_CAST_PER_MOVIE   -> Hauptcast pro Film begrenzen (Kombinationsexplosion vermeiden)
   MIN_MOVIES_PER_ACTOR -> Schauspieler mit weniger Filmen werden entfernt
   MIN_WEIGHT           -> nur Kanten mit mind. so vielen gemeinsamen Filmen behalten
@@ -24,7 +15,7 @@ from itertools import combinations
 from collections import Counter
 
 # ===========================================================
-# EINSTELLUNGEN – hier anpassen
+
 # ===========================================================
 SCRIPT_DIR = os.getcwd()
 INPUT_FILE = os.path.join(SCRIPT_DIR, "movies_2000_2020_us_uk.csv")
